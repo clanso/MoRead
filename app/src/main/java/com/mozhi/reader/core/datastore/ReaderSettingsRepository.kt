@@ -1270,7 +1270,8 @@ class ReaderSettingsRepository @Inject constructor(
                 ),
                 annotationPersonaIds = preferences[Keys.CompanionAnnotationPersonas].orEmpty()
                     .mapNotNull { it.toLongOrNull()?.takeIf { id -> id > 0 } }.toSet(),
-                annotationPrompts = ProactiveAnnotationPrompts.decode(preferences[Keys.CompanionAnnotationPrompts])
+                annotationPrompts = ProactiveAnnotationPrompts.decode(preferences[Keys.CompanionAnnotationPrompts]),
+                annotationTemplates = AnnotationPromptTemplates.decode(preferences[Keys.CompanionAnnotationTemplates])
             )
         }
 
@@ -1332,6 +1333,18 @@ class ReaderSettingsRepository @Inject constructor(
 
     suspend fun resetAnnotationPrompts() = editAnnotationPrompts { ProactiveAnnotationPrompts.DEFAULTS }
 
+    /** 保存一段流程提示词；和默认一样或为空就等于恢复默认（不再存这一条）。 */
+    suspend fun saveAnnotationTemplate(id: String, text: String?) {
+        dataStore.edit { preferences ->
+            val current = AnnotationPromptTemplates.decode(preferences[Keys.CompanionAnnotationTemplates])
+            preferences[Keys.CompanionAnnotationTemplates] = AnnotationPromptTemplates.encode(current.with(id, text))
+        }
+    }
+
+    suspend fun resetAnnotationTemplates() {
+        dataStore.edit { it.remove(Keys.CompanionAnnotationTemplates) }
+    }
+
     private suspend fun editAnnotationPrompts(transform: (List<GlobalPromptPreset>) -> List<GlobalPromptPreset>) {
         dataStore.edit { preferences ->
             preferences[Keys.CompanionAnnotationPrompts] = ProactiveAnnotationPrompts.encode(
@@ -1377,6 +1390,7 @@ class ReaderSettingsRepository @Inject constructor(
     private object Keys {
         val CompanionAnnotationPersonas = stringSetPreferencesKey("companion_annotation_personas")
         val CompanionAnnotationPrompts = stringPreferencesKey("companion_annotation_prompts")
+        val CompanionAnnotationTemplates = stringPreferencesKey("companion_annotation_templates")
         val CompanionAnnotationLimits = stringPreferencesKey("companion_annotation_limits")
         val CompanionAnnotationLimitsByBook =
             stringPreferencesKey("companion_annotation_limits_by_book")

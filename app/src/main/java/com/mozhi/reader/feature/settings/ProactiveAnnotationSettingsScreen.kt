@@ -44,7 +44,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mozhi.reader.core.datastore.AnnotationBatchSettings
 import com.mozhi.reader.core.datastore.AnnotationContextMode
+import com.mozhi.reader.core.datastore.AnnotationGenerationMode
 import com.mozhi.reader.core.datastore.ProactiveAnnotationContextSettings
 import com.mozhi.reader.core.datastore.BookProactiveAnnotationLimits
 import com.mozhi.reader.core.datastore.ProactiveAnnotationLimits
@@ -122,6 +124,7 @@ internal fun ProactiveAnnotationSettingsContent(
         "timing" -> "生成方式"
         "context" -> "前文与上下文"
         "limits" -> "数量与额度"
+        "batch" -> stringResource(R.string.annotation_batch_page_title)
         "notice" -> "伴读弹幕"
         else -> if (bookId == null) "随读段评" else "本书随读段评"
     }
@@ -176,7 +179,13 @@ internal fun ProactiveAnnotationSettingsContent(
                 }
                 item {
                     MoReadSection(title = "更多设置") {
-                        MoReadRow(title = "前文与上下文", subtitle = "${editing.context.mode.label} · 每次 ${editing.context.budgetChars} 字符",
+                        MoReadRow(title = stringResource(R.string.annotation_batch_page_title), subtitle = batchSummary(editing.batch),
+                            onClick = { page = "batch" })
+                        MoReadRowDivider()
+                        val persona = if (editing.context.personaUnlimited) stringResource(R.string.annotation_context_persona_unlimited)
+                        else stringResource(R.string.annotation_context_persona_cap, editing.context.personaMaxChars)
+                        MoReadRow(title = "前文与上下文", subtitle = if (editing.batch.batch) persona else
+                            "${editing.context.mode.label} · 每次 ${editing.context.budgetChars} 字符 · $persona",
                             onClick = { page = "context" })
                     }
                 }
@@ -206,14 +215,15 @@ internal fun ProactiveAnnotationSettingsContent(
                         checked = state.autonomy.annotationInterplay, onCheckedChange = onSetInterplay)
                 }
             }
-            if (page != "overview" && !editable && page in setOf("timing", "context", "limits")) item {
+            if (page != "overview" && !editable && page in setOf("timing", "context", "limits", "batch")) item {
                 MoReadSection(title = "跟随全局") {
                     MoReadRow(title = "开启本书单独设置后可修改", onClick = { page = "overview" })
                 }
             }
             if (page == "timing") {
                 item {
-                    MoReadSection(title = "何时生成", footer = "每条段评会调用一次模型。") {
+                    MoReadSection(title = "何时生成", footer = stringResource(if (editing.batch.batch)
+                        R.string.annotation_timing_footer_batch else R.string.annotation_timing_footer_paragraph)) {
                         ProactiveAnnotationTiming.entries.forEach { timing ->
                             MoReadRow(title = if (timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) "进入章节预生成" else "读完后生成上一章",
                                 subtitle = if (timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY) "读到对应段落时显示" else "只读取已读正文",
@@ -234,7 +244,20 @@ internal fun ProactiveAnnotationSettingsContent(
                 }
             }
             if (page == "context") item {
-                MoReadSection(title = "阅读资料预算", footer = "只检索目标段落之前的正文。") {
+                MoReadSection(title = stringResource(R.string.annotation_persona_section),
+                    footer = stringResource(R.string.annotation_persona_footer)) {
+                    MoReadNumberRow(title = stringResource(R.string.annotation_persona_cap_title),
+                        subtitle = stringResource(R.string.annotation_persona_cap_summary),
+                        value = editing.context.personaMaxChars.takeUnless { it == ProactiveAnnotationContextSettings.UNLIMITED },
+                        range = ProactiveAnnotationContextSettings.MIN_PERSONA_CHARS..ProactiveAnnotationContextSettings.MAX_PERSONA_CHARS,
+                        unit = stringResource(R.string.annotation_unit_chars), allowUnlimited = true, enabled = editable,
+                        onValueChange = { next -> commit(editing.copy(context = editing.context.copy(
+                            personaMaxChars = next ?: ProactiveAnnotationContextSettings.UNLIMITED).normalized())) })
+                }
+            }
+            if (page == "context") item {
+                MoReadSection(title = stringResource(R.string.annotation_context_budget_section),
+                    footer = stringResource(R.string.annotation_context_budget_footer)) {
                     MoReadBlock {
                         MoReadSegmented(options = AnnotationContextMode.entries.toList(), selected = editing.context.mode,
                             onSelect = { commit(editing.copy(context = editing.context.copy(mode = it))) }, enabled = editable, label = { it.label })
@@ -300,6 +323,59 @@ internal fun ProactiveAnnotationSettingsContent(
                     }
                 }
             }
+            if (page == "batch") {
+                val batch = editing.batch
+                fun commitBatch(next: AnnotationBatchSettings) = commit(editing.copy(batch = next.normalized()))
+                item {
+                    MoReadSection(title = stringResource(R.string.annotation_batch_mode_section),
+                        footer = stringResource(R.string.annotation_batch_mode_footer)) {
+                        MoReadBlock {
+                            MoReadSegmented(options = AnnotationGenerationMode.entries.toList(), selected = batch.mode,
+                                onSelect = { commitBatch(batch.copy(mode = it)) }, enabled = editable, label = { it.label })
+                        }
+                    }
+                }
+                if (batch.batch) {
+                    item {
+                        val chars = stringResource(R.string.annotation_unit_chars)
+                        MoReadSection(title = stringResource(R.string.annotation_batch_chunk_section),
+                            footer = stringResource(R.string.annotation_batch_chunk_footer)) {
+                            MoReadNumberRow(title = stringResource(R.string.annotation_batch_chunk_title),
+                                subtitle = stringResource(R.string.annotation_batch_chunk_summary),
+                                value = batch.chunkChars, range = AnnotationBatchSettings.MIN_CHUNK_CHARS..AnnotationBatchSettings.MAX_CHUNK_CHARS,
+                                unit = chars, enabled = editable, onValueChange = { next -> next?.let { commitBatch(batch.copy(chunkChars = it)) } })
+                            MoReadRowDivider(inset = MoReadSpacing.l)
+                            MoReadNumberRow(title = stringResource(R.string.annotation_batch_pace_title),
+                                subtitle = stringResource(R.string.annotation_batch_pace_summary),
+                                value = batch.charsPerNote, range = AnnotationBatchSettings.MIN_CHARS_PER_NOTE..AnnotationBatchSettings.MAX_CHARS_PER_NOTE,
+                                unit = chars, enabled = editable, onValueChange = { next -> next?.let { commitBatch(batch.copy(charsPerNote = it)) } })
+                        }
+                    }
+                    item {
+                        MoReadSection(title = stringResource(R.string.annotation_batch_record_section),
+                            footer = stringResource(R.string.annotation_batch_record_footer)) {
+                            MoReadNumberRow(title = stringResource(R.string.annotation_batch_record_title),
+                                subtitle = stringResource(R.string.annotation_batch_record_summary, batch.windowChars * 2 / 3 / 1000),
+                                value = batch.windowChars, range = AnnotationBatchSettings.MIN_WINDOW_CHARS..AnnotationBatchSettings.MAX_WINDOW_CHARS,
+                                unit = stringResource(R.string.annotation_unit_chars), enabled = editable,
+                                onValueChange = { next -> next?.let { commitBatch(batch.copy(windowChars = it)) } })
+                            MoReadRowDivider(inset = MoReadSpacing.l)
+                            MoReadNumberRow(title = stringResource(R.string.annotation_batch_recap_title),
+                                subtitle = stringResource(R.string.annotation_batch_recap_summary),
+                                value = batch.recapPercent, range = AnnotationBatchSettings.MIN_RECAP_PERCENT..AnnotationBatchSettings.MAX_RECAP_PERCENT,
+                                unit = "%", enabled = editable, onValueChange = { next -> next?.let { commitBatch(batch.copy(recapPercent = it)) } })
+                        }
+                    }
+                    item {
+                        MoReadSection(title = stringResource(R.string.annotation_batch_proofread_section),
+                            footer = stringResource(R.string.annotation_batch_proofread_footer)) {
+                            MoReadSwitchRow(title = stringResource(R.string.annotation_batch_proofread_title), checked = batch.proofread,
+                                enabled = editable,
+                                onCheckedChange = { commitBatch(batch.copy(proofread = it)) })
+                        }
+                    }
+                }
+            }
             if (page == "notice" && bookId == null) item {
                 MoReadSection(title = "提示方式", footer = "5 秒自动收起，生成后即可查看段评。") {
                     ProactiveAnnotationNotice.entries.forEach { mode ->
@@ -323,10 +399,11 @@ internal fun ProactiveAnnotationSettingsContent(
     if (help) AlertDialog(onDismissRequest = { help = false }, title = { Text("段评说明") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             Text(when (page) {
-                "timing" -> "预生成会提前读取未读段落，每条段评只使用截至目标段落的内容。生成后即可查看，由你决定是否打开。\n\n每条段评一次模型调用；使用主动段评分配，未配置时使用 cheap。本章与提前章节轮流生成，额外提前的章节会提前消耗额度。"
+                "timing" -> stringResource(R.string.annotation_timing_help)
                 "context" -> "预算包含本章正文、前文片段和梗概，不含角色设定与写作提示词。按字符计算，实际发送量可能更少。\n\n本地检索不增加模型调用，提高预算会增加单次发送量。"
                 "limits" -> "下限是给模型的请求，无合适内容时可以少生成。不限制上限时会逐个处理候选段落，仍受每日额度约束。\n\n同一角色与正文版本完成后不重复生成。提高上限不会给已完成章节补生成。失败最多两轮，切换设置或离开不占失败次数。"
                 "notice" -> "快速模型根据角色性格说一句共读感想，不发送正文、段评或聊天记录。失败或超时回落为内置短句。"
+                "batch" -> stringResource(R.string.annotation_batch_help)
                 "personas" -> "每章条数对每位伴读分别生效；每日额度由所有伴读共享，并为后续伴读预留份额。未单独选择时跟随当前伴读。"
                 else -> "开启随读段评会使用你配置的 AI 服务并消耗 API 额度。\n\n生成方式决定何时开始；数量与额度控制调用量；前文与上下文控制每次发送的阅读资料量。\n\n本书设置只覆盖本书的生成方式、上下文与额度，伴读和提示词使用全局设置。"
             })
@@ -397,4 +474,14 @@ private fun AnnotationUsageCard(
             )
         }
     }
+}
+
+/** 总览页一行：整段参数的摘要。 */
+@Composable
+private fun batchSummary(settings: AnnotationBatchSettings): String = when {
+    !settings.batch -> stringResource(R.string.annotation_batch_summary_paragraph)
+    else -> stringResource(
+        if (settings.proofread) R.string.annotation_batch_summary_proofread else R.string.annotation_batch_summary,
+        settings.chunkChars, settings.charsPerNote, settings.windowChars / 1000
+    )
 }

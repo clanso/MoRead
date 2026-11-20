@@ -158,6 +158,11 @@ fun BookDetailScreen(
     onLocateAnnotation: (AnnotationEntity) -> Unit = {},
     /** 书架长按菜单的深链动作：edit = 直接开信息编辑，cover = 直接开封面选择。 */
     initialAction: String? = null,
+    /**
+     * 「整本段评」卡（后台整本生成、批注包导出导入），有自己的 Hilt ViewModel，由导航层传入
+     * [BookAnnotationToolsCard]；不传就不显示（界面测试里没有 Hilt）。
+     */
+    annotationTools: (@Composable (bookTitle: String, onMessage: suspend (String) -> Unit, modifier: Modifier) -> Unit)? = null,
     viewModel: BookDetailViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -340,6 +345,9 @@ fun BookDetailScreen(
                         onOpen = { onOpenAnnotationLimits(bookId) },
                         modifier = Modifier.padding(horizontal = 20.dp)
                     )
+                }
+                if (annotationTools != null) item(key = "detail-annotation-tools") {
+                    annotationTools(book.title, { snackbarHostState.showSnackbar(it) }, Modifier.padding(horizontal = 20.dp))
                 }
                 item(key = "detail-notes") {
                     NotesSection(

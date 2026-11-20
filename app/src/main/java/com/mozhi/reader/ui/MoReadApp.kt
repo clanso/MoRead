@@ -77,6 +77,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mozhi.reader.R
+import com.mozhi.reader.feature.bookdetail.BookAnnotationToolsCard
 import com.mozhi.reader.feature.bookdetail.BookDetailScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfScreen
 import com.mozhi.reader.feature.bookshelf.BookshelfViewModel
@@ -517,6 +518,9 @@ fun MoReadApp(
                         onOpenAudiobookProduction = { bookId -> navController.navigate("audiobook-production/$bookId") },
                         onOpenAnnotationLimits = { bookId ->
                             navController.navigate("annotation-limits/$bookId")
+                        },
+                        annotationTools = { title, onMessage, modifier ->
+                            BookAnnotationToolsCard(bookTitle = title, onMessage = onMessage, modifier = modifier)
                         }
                     )
                 }

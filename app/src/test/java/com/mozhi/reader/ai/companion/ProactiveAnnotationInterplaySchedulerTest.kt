@@ -1,5 +1,6 @@
 package com.mozhi.reader.ai.companion
 
+import io.mockk.mockk
 import android.app.Application
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -27,7 +28,7 @@ class ProactiveAnnotationInterplaySchedulerTest {
         val service = mockk<ProactiveAnnotationService>()
         val quota = mockk<ProactiveAnnotationQuota>()
         val autonomy = MutableStateFlow(CompanionAutonomySettings(proactiveAnnotationsEnabled = true,
-            annotationPersonaIds = setOf(3, 8), annotationLimits = ProactiveAnnotationLimits(
+            annotationPersonaIds = setOf(3, 8), annotationLimits = ProactiveAnnotationLimits(batch = PARAGRAPH_MODE, 
                 maxPerChapter = 2, dailyMax = ProactiveAnnotationLimits.UNLIMITED)))
         val scheduler: ProactiveAnnotationScheduler
 
@@ -46,7 +47,7 @@ class ProactiveAnnotationInterplaySchedulerTest {
             every { settings.companionAutonomySettings } returns autonomy
             coEvery { quota.reserve(any(), any(), any(), any()) } returns ProactiveAnnotationAllowance(true, 100)
             coEvery { quota.recordCreated(any(), any(), any(), any()) } just Runs
-            scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, scope)
+            scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, mockk(relaxed = true), scope)
             scheduler.setReaderBook(1)
         }
 

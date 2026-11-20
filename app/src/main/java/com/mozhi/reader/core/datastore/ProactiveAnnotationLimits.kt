@@ -24,7 +24,8 @@ data class ProactiveAnnotationLimits(
     val maxImagesPerChapter: Int = 1,
     val timing: ProactiveAnnotationTiming = ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE,
     val aheadChapters: Int = 0,
-    val context: ProactiveAnnotationContextSettings = ProactiveAnnotationContextSettings()
+    val context: ProactiveAnnotationContextSettings = ProactiveAnnotationContextSettings(),
+    val batch: AnnotationBatchSettings = AnnotationBatchSettings()
 ) {
     val chapterUnlimited: Boolean get() = maxPerChapter == UNLIMITED
     val dailyUnlimited: Boolean get() = dailyMax == UNLIMITED
@@ -42,7 +43,8 @@ data class ProactiveAnnotationLimits(
             maxImagesPerChapter = maxImagesPerChapter.coerceIn(1, MAX_IMAGES_PER_CHAPTER),
             timing = timing,
             aheadChapters = aheadChapters.coerceIn(0, MAX_AHEAD_CHAPTERS),
-            context = context.normalized()
+            context = context.normalized(),
+            batch = batch.normalized()
         )
     }
 

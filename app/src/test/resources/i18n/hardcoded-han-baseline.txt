@@ -29,7 +29,7 @@ feature/companion/LibraryCompanionScreen.kt	16
 feature/companion/LibraryCompanionViewModel.kt	12
 feature/companion/LibraryOrganizationSheet.kt	7
 feature/companion/PersonaAppearanceCards.kt	14
-feature/companion/PersonaEditorScreen.kt	91
+feature/companion/PersonaEditorScreen.kt	90
 feature/companion/PersonaEditorViewModel.kt	19
 feature/companion/PersonaMemoryScreen.kt	24
 feature/companion/PersonaMemoryViewModel.kt	7
@@ -172,7 +172,7 @@ feature/settings/ImageGenSettingsViewModel.kt	10
 feature/settings/ImageLibraryScreen.kt	32
 feature/settings/ImageLibraryViewModel.kt	13
 feature/settings/ModelParameterFields.kt	16
-feature/settings/ProactiveAnnotationSettingsScreen.kt	74
+feature/settings/ProactiveAnnotationSettingsScreen.kt	70
 feature/settings/ProviderDetailScreen.kt	78
 feature/settings/ProviderDetailViewModel.kt	12
 feature/settings/ProviderLabels.kt	18

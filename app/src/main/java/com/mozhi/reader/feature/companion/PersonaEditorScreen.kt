@@ -58,9 +58,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mozhi.reader.R
+import com.mozhi.reader.ai.prompt.PersonaLoreMatcher
 import com.mozhi.reader.core.database.entity.PersonaLoreEntry
 import com.mozhi.reader.core.database.entity.TtsVoiceEntity
 import com.mozhi.reader.ui.components.MoReadFieldGroup
@@ -121,6 +125,10 @@ fun PersonaEditorScreen(
     val cardPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri -> viewModel.importCard(uri) }
+    // 卡只链接了外部世界书（SillyTavern 的 extensions.world）时，从这里把那份世界书文件导进来。
+    val lorePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> viewModel.importLorebook(uri) }
 
     if (state.loading) {
         com.mozhi.reader.ui.components.MoReadBackdrop {
@@ -263,6 +271,8 @@ fun PersonaEditorScreen(
                             )
                         }
                         AddInlineButton(label = "添加设定条目", onClick = viewModel::addLoreEntry)
+                        AddInlineButton(label = stringResource(R.string.persona_lore_import_file),
+                            onClick = { lorePicker.launch("*/*") })
                     }
                 }
             }
@@ -594,7 +604,9 @@ private fun LoreEntryBlock(
                 )
                 Text(
                     text = if (entry.constant) "常驻注入" else {
-                        "关键词：${entry.keys.take(3).joinToString("、").ifBlank { "未设置" }}"
+                        "关键词：${entry.keys.take(3).joinToString("、").ifBlank { "未设置" }}" +
+                            if (entry.secondaryKeys.isEmpty()) "" else pluralStringResource(
+                                R.plurals.persona_lore_secondary_count, entry.secondaryKeys.size, entry.secondaryKeys.size)
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -643,20 +655,42 @@ private fun LoreEntryBlock(
                 }
             }
             if (!entry.constant) {
-                MoReadTextField(
-                    value = entry.keys.joinToString("、"),
-                    onValueChange = { text ->
-                        onChange(
-                            entry.copy(
-                                keys = text.split('、', ',', '，')
-                                    .map(String::trim)
-                                    .filter(String::isNotEmpty)
-                            )
-                        )
-                    },
+                KeyListField(
+                    index = index,
+                    keys = entry.keys,
+                    onKeys = { onChange(entry.copy(keys = it)) },
                     label = "触发词",
-                    supporting = "顿号分隔，命中才注入"
+                    supporting = stringResource(R.string.persona_lore_keys_supporting)
                 )
+                KeyListField(
+                    index = index,
+                    keys = entry.secondaryKeys,
+                    onKeys = { onChange(entry.copy(secondaryKeys = it)) },
+                    label = stringResource(R.string.persona_lore_secondary_keys),
+                    supporting = stringResource(R.string.persona_lore_secondary_supporting)
+                )
+                if (entry.secondaryKeys.isNotEmpty()) {
+                    val logicLabels = LORE_LOGIC.associate { (logic, label) -> logic to stringResource(label) }
+                    MoReadSegmented(
+                        options = LORE_LOGIC.map { it.first },
+                        selected = entry.selectiveLogic.takeIf { it in logicLabels } ?: PersonaLoreMatcher.AND_ANY,
+                        onSelect = { onChange(entry.copy(selectiveLogic = it)) },
+                        label = { logic -> logicLabels.getValue(logic) }
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        stringResource(R.string.persona_lore_case_sensitive),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = entry.caseSensitive,
+                        onCheckedChange = { onChange(entry.copy(caseSensitive = it)) },
+                        modifier = Modifier.scale(0.76f)
+                    )
+                }
             }
             MoReadTextField(
                 value = entry.name,
@@ -672,6 +706,41 @@ private fun LoreEntryBlock(
             )
         }
     }
+}
+
+/** SillyTavern 的 selectiveLogic：次要触发词怎么过滤。 */
+private val LORE_LOGIC = listOf(
+    PersonaLoreMatcher.AND_ANY to R.string.persona_lore_logic_and_any,
+    PersonaLoreMatcher.AND_ALL to R.string.persona_lore_logic_and_all,
+    PersonaLoreMatcher.NOT_ANY to R.string.persona_lore_logic_not_any,
+    PersonaLoreMatcher.NOT_ALL to R.string.persona_lore_logic_not_all
+)
+
+/**
+ * 触发词输入框。框里的字自己存着：边打边拆的话，刚打出的顿号会被当成空词吞掉。
+ * 外面改了词（导入、撤销）时再跟着刷新。
+ */
+@Composable
+private fun KeyListField(
+    index: Int,
+    keys: List<String>,
+    onKeys: (List<String>) -> Unit,
+    label: String,
+    supporting: String
+) {
+    var text by rememberSaveable(index, label) { mutableStateOf(PersonaLoreMatcher.joinKeys(keys)) }
+    LaunchedEffect(keys) {
+        if (PersonaLoreMatcher.splitKeys(text) != keys) text = PersonaLoreMatcher.joinKeys(keys)
+    }
+    MoReadTextField(
+        value = text,
+        onValueChange = { next ->
+            text = next
+            onKeys(PersonaLoreMatcher.splitKeys(next))
+        },
+        label = label,
+        supporting = supporting
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)

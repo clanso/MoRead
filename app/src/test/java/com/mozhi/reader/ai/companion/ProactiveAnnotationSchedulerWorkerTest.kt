@@ -1,5 +1,6 @@
 package com.mozhi.reader.ai.companion
 
+import io.mockk.mockk
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.dao.ProactiveAnnotationJobDao
@@ -124,7 +125,7 @@ class ProactiveAnnotationSchedulerWorkerTest {
         val quota = mockk<ProactiveAnnotationQuota>()
         val service = mockk<ProactiveAnnotationService>()
         val autonomy = MutableStateFlow(CompanionAutonomySettings(proactiveAnnotationsEnabled = true,
-            annotationLimits = ProactiveAnnotationLimits(timing = ProactiveAnnotationTiming.ON_CHAPTER_ENTRY, aheadChapters = 5)))
+            annotationLimits = ProactiveAnnotationLimits(batch = PARAGRAPH_MODE, timing = ProactiveAnnotationTiming.ON_CHAPTER_ENTRY, aheadChapters = 5)))
         val persona = MutableStateFlow<Long?>(3)
         var body = "正文".repeat(40)
         var totalChapters = 20
@@ -149,7 +150,7 @@ class ProactiveAnnotationSchedulerWorkerTest {
             coEvery { quota.reserve(any(), any(), any(), any()) } returns ProactiveAnnotationAllowance(true, 2)
             coEvery { quota.recordCreated(any(), any(), any(), any()) } just Runs
             coEvery { service.generateForChapter(any(), any(), any(), any(), any(), any(), any()) } returns ProactiveAnnotationGenerationResult(false, false)
-            scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, scope)
+            scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, mockk(relaxed = true), scope)
             scheduler.setReaderBook(1)
         }
     }
@@ -480,7 +481,7 @@ class ProactiveAnnotationSchedulerWorkerTest {
         f.scheduler.onChapterEntered(1, 0); runCurrent()
         f.autonomy.value = f.autonomy.value.copy(voiceRepliesEnabled = true, imageRepliesEnabled = true,
             annotationNotice = ProactiveAnnotationNotice.FAST_MODEL,
-            annotationLimitsByBook = mapOf(99L to BookProactiveAnnotationLimits(true, ProactiveAnnotationLimits(dailyMax = 1))))
+            annotationLimitsByBook = mapOf(99L to BookProactiveAnnotationLimits(true, ProactiveAnnotationLimits(batch = PARAGRAPH_MODE, dailyMax = 1))))
         runCurrent(); gate.complete(Unit); runCurrent()
         assertEquals(true, permitted)
         assertEquals(0, f.ledger.rows.values.single().attempts)

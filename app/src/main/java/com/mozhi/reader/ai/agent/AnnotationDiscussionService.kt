@@ -1,5 +1,6 @@
 package com.mozhi.reader.ai.agent
 
+import com.mozhi.reader.ai.prompt.PersonaLoreMatcher
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.ai.persona.PersonaRepository
@@ -230,6 +231,9 @@ internal fun buildDiscussionSystemPrompt(
     if (persona.speakingStyle.isNotBlank()) {
         append("\n说话风格：").append(persona.speakingStyle.trim())
     }
+    // 世界书：常驻条目总在；触发式条目拿被讨论的原文、上下文和讨论串去命中（同聊天的规则）。
+    val lore = PersonaLoreMatcher.active(persona, listOf(quote, neighborhood, transcript).joinToString("\n"))
+    if (lore.isNotEmpty()) append("\n").append(PersonaLoreMatcher.block(lore))
     append("\n\n你正在和用户共读《").append(book.title).append("》")
     if (readingScope.isWholeBook) append("，用户已关闭防剧透限制。")
     else append("，用户最远读到第 ").append(readingScope.maxChapterIndex + 1).append(" 章内，工具只提供已读部分。")

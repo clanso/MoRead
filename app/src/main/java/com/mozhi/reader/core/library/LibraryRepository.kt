@@ -639,6 +639,7 @@ class LibraryRepository @Inject constructor(
             if (deleteRecords) bookDao.deleteBook(book.id)
             else bookDao.markRemoved(book.id, System.currentTimeMillis().coerceAtLeast(1L))
             database.proactiveAnnotationJobDao().deleteForBook(book.id)
+            database.annotationMemoryDao().clear(book.id)
             database.shelfOrganizationDao().deleteEmptyCollections()
             ids
         }

@@ -31,13 +31,13 @@ class ProactiveAnnotationServiceTest {
         assertTrue(user.indexOf("marker-2") < user.indexOf("正文前缀"))
         assertTrue(user.endsWith("marker-3"))
         assertFalse(messages.any { "never-inject" in it.content.orEmpty() })
-        assertFalse(system.contains("用你自己的口吻和性格写"))
+        assertFalse(system.contains("脱口而出"))
         assertTrue(system.contains("只输出一个 JSON 对象"))
         assertTrue(system.contains("你和用户都在书外一起阅读"))
         assertTrue(system.contains("用户是读者，不是书中人物"))
         assertTrue(system.contains("不能把共读场景变成剧情扮演"))
         assertTrue(system.contains("即使人物与你或用户同名"))
-        assertTrue(system.contains("绝不推测后文"))
+        assertTrue(system.contains("绝不假装知道后文"))
     }
     private val factory = mockk<AiClientFactory>()
     private val client = mockk<ChatApiClient>()
@@ -178,11 +178,11 @@ class ProactiveAnnotationServiceTest {
         coEvery { client.chat(capture(messages), any()) } returns """{"quote":"$first","note":"评论","style":"WAVY"}"""
         service.generateForChapter(request.copy(candidateLimit = 1), { permit }, { _, _ -> }, { _, _, _ -> true })
         val prompt = messages.single().first().content.orEmpty()
-        assertTrue(prompt.contains("HIGHLIGHT（荧光）：金句"))
+        assertTrue(prompt.contains("HIGHLIGHT（荧光）：打动你的句子"))
         assertTrue(prompt.contains("WAVY（波浪线）："))
         assertTrue(prompt.contains("UNDERLINE（直线）：知识点"))
-        assertTrue(prompt.contains("不要随机轮换"))
-        assertTrue(prompt.contains("不能据此断言未读剧情"))
+        assertTrue(prompt.contains("不要整批都用同一种"))
+        assertTrue(prompt.contains("不断言后文"))
         assertFalse(prompt.contains("\"style\":\"HIGHLIGHT\""))
     }
 
@@ -328,19 +328,23 @@ class ProactiveAnnotationServiceTest {
         assertTrue(system.contains(roleplay.personality))
         assertTrue(system.contains(roleplay.speakingStyle))
         assertTrue(system.contains("先读到第三章再问我。"))
-        assertTrue(system.contains("用你自己的口吻和性格写"))
+        assertTrue(system.contains("用你自己的口吻、立场和经历去反应"))
         assertFalse(system.contains("你是随读段评编辑"))
         // 写作规则仍然完整：样式语义、防剧透与 JSON 契约一个都不能丢。
-        assertTrue(system.contains("HIGHLIGHT（荧光）：金句"))
-        assertTrue(system.contains("绝不推测后文"))
+        assertTrue(system.contains("HIGHLIGHT（荧光）：打动你的句子"))
+        assertTrue(system.contains("绝不假装知道后文"))
         assertTrue(system.contains("只输出一个 JSON 对象"))
         // 正文只在用户消息里，且以目标段落结尾；角色资料不再混进正文消息。
         val user = messages.last().content.orEmpty()
         assertTrue(user.endsWith("最后一段"))
         assertFalse(user.contains(roleplay.personality))
-        // 超长人设按成本上限收口，而不是原样塞给 CHEAP 模型。
-        val huge = proactiveAnnotationMessages(roleplay.copy(personality = "长".repeat(10_000)), "前缀").first().content.orEmpty()
-        assertTrue(huge.length < PROACTIVE_PERSONA_MAX_CHARS + 1_200)
+        // 人设默认整份发送（旧版截到 2400 字，长人设后面的世界书整段丢失）；设了上限才按上限收口。
+        val longPersona = roleplay.copy(personality = "长".repeat(10_000))
+        val full = proactiveAnnotationMessages(longPersona, "前缀").first().content.orEmpty()
+        assertTrue(full.contains("长".repeat(10_000)))
+        val capped = proactiveAnnotationMessages(longPersona, "前缀", personaMaxChars = 2_400).first().content.orEmpty()
+        assertFalse(capped.contains("长".repeat(2_500)))
+        assertTrue(capped.length < full.length - 7_000)
     }
 
     @Test fun changedPreviousChaptersStopBeforePaidCall() = runTest {

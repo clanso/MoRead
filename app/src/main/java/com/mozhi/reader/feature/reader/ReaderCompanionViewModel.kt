@@ -648,7 +648,8 @@ class ReaderCompanionViewModel @Inject constructor(
             val removed = session.value.messages.filter { it.id > precedingUser.id }
             runCatching { removingMessages(removed) { chatRepository.prepareReroll(messageId) } }
                 .onSuccess { conversationId ->
-                    if (session.value.conversationId == conversationId) stream(book, persona, conversationId, sceneQuote, memoryQuery = null)
+                    if (session.value.conversationId == conversationId) stream(book, persona, conversationId, sceneQuote, memoryQuery = null,
+                        loreQuery = precedingUser.content)
                 }
                 .onFailure { error ->
                     if (session.value.conversationId == precedingUser.conversationId) {
@@ -816,7 +817,9 @@ class ReaderCompanionViewModel @Inject constructor(
         if (session.value.isStreaming || session.value.stoppedReply != null) return
         session.value = session.value.copy(error = null)
         viewModelScope.launch {
-            stream(book, persona, conversationId, sceneQuote, memoryQuery = null)
+            // 重试不再检索记忆，但世界书照样拿用户最后一句去触发，免得重试的回复丢了设定。
+            stream(book, persona, conversationId, sceneQuote, memoryQuery = null,
+                loreQuery = session.value.messages.lastOrNull { it.role == "user" }?.content)
         }
     }
 
@@ -1027,7 +1030,9 @@ class ReaderCompanionViewModel @Inject constructor(
         conversationId: Long,
         sceneQuote: String,
         memoryQuery: String?,
-        requiredTools: Set<String> = emptySet()
+        requiredTools: Set<String> = emptySet(),
+        /** 世界书触发词的命中材料（用户这一句）；默认同 [memoryQuery]，重试时由调用方补上。 */
+        loreQuery: String? = memoryQuery
     ) {
         streamJob?.cancel()
         suggestionJob?.cancel()
@@ -1099,6 +1104,7 @@ class ReaderCompanionViewModel @Inject constructor(
                         bookId = book,
                         scene = sceneQuote.takeIf(String::isNotBlank),
                         memoryQuery = memoryQuery,
+                        loreQuery = loreQuery,
                         readingScope = readingScope,
                         conversationShape = ConversationShape(
                             multiBubble = multiBubble,

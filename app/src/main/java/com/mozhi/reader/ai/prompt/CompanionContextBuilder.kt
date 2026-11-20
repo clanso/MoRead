@@ -6,7 +6,6 @@ import com.mozhi.reader.ai.client.AiClientFactory
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.database.entity.PersonaEntity
 import com.mozhi.reader.core.database.entity.exampleDialogs
-import com.mozhi.reader.core.database.entity.worldBook
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.UserMask
 import com.mozhi.reader.core.datastore.UserMaskStore
@@ -70,12 +69,15 @@ class CompanionContextBuilder @Inject constructor(
     /**
      * @param scene 调用方备好的场景原文（选段及其邻域，或章节开头），可空
      * @param memoryQuery 用于主动记忆检索的文本（通常是用户最新一条输入），可空
+     * @param loreQuery 世界书触发词的命中材料（用户这一句）；默认同 [memoryQuery]。重试时不检索记忆，
+     *   但仍要拿用户最后一句去触发世界书，否则重试出来的回复会丢掉关键词条目。
      */
     suspend fun build(
         persona: PersonaEntity?,
         bookId: Long?,
         scene: String? = null,
         memoryQuery: String? = null,
+        loreQuery: String? = memoryQuery,
         readingScope: ReadingScope,
         conversationShape: ConversationShape = ConversationShape(),
         budgetChars: Int = DEFAULT_BUDGET_CHARS
@@ -143,7 +145,7 @@ class CompanionContextBuilder @Inject constructor(
             readingScope = readingScope,
             conversationShape = conversationShape,
             // 关键词触发的世界书条目拿「场景原文 + 用户最新输入」当命中材料。
-            loreTrigger = listOfNotNull(scene, memoryQuery).joinToString("\n"),
+            loreTrigger = listOfNotNull(scene, loreQuery).joinToString("\n"),
             budgetChars = budgetChars
         )
     }
@@ -253,7 +255,12 @@ class CompanionContextBuilder @Inject constructor(
          * 角色身份块：人设、说话风格、示例对话与命中的设定集。聊天、随读段评与其他要「以这个
          * 角色的口吻开口」的路径都从这里取，保证同一个角色在不同入口说话是同一个人。
          */
-        internal fun personaBlock(persona: PersonaEntity?, loreTrigger: String): String {
+        internal fun personaBlock(
+            persona: PersonaEntity?,
+            loreTrigger: String,
+            /** false：只放常驻条目，触发式条目由调用方放进会变的那条消息里（保持系统提示词稳定，便于缓存）。 */
+            includeTriggered: Boolean = true
+        ): String {
             if (persona == null) {
                 return "你是「墨知」阅读器的伴读助手，陪伴用户阅读并帮助他理解已读内容。"
             }
@@ -280,26 +287,10 @@ class CompanionContextBuilder @Inject constructor(
                         append("\n").append(persona.name).append("：").append(dialog.assistant)
                     }
                 }
-                // 世界书：总开关 → 条目开关 → 注入方式（常驻直接进；触发式要命中材料）。
-                val lore = if (persona.worldBookEnabled) {
-                    persona.worldBook().filter { entry ->
-                        entry.enabled && entry.content.isNotBlank() && (
-                            entry.constant || entry.keys.any { key ->
-                                key.isNotBlank() && loreTrigger.contains(key, ignoreCase = true)
-                            }
-                            )
-                    }
-                } else {
-                    emptyList()
-                }
-                if (lore.isNotEmpty()) {
-                    append("\n【设定集】")
-                    lore.forEach { entry ->
-                        append("\n- ")
-                        if (entry.name.isNotBlank()) append(entry.name).append("：")
-                        append(entry.content)
-                    }
-                }
+                // 世界书：总开关 → 条目开关 → 注入方式（常驻直接进；触发式要命中材料），规则见 PersonaLoreMatcher。
+                val lore = if (includeTriggered) PersonaLoreMatcher.active(persona, loreTrigger)
+                else PersonaLoreMatcher.constant(persona)
+                if (lore.isNotEmpty()) append("\n").append(PersonaLoreMatcher.block(lore))
             }
         }
 

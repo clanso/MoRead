@@ -3,10 +3,12 @@ package com.mozhi.reader.ai.persona
 import com.mozhi.reader.core.database.entity.PersonaExampleDialog
 import com.mozhi.reader.core.database.entity.PersonaLoreEntry
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 
 /**
@@ -31,7 +33,9 @@ data class ImportedPersonaCard(
  * - 纯 JSON 卡：V2/V3 的字段在 `data` 下，V1 在根级。
  *
  * 提取规则（「自动提取人设」）：description / personality / scenario 合并进人设描述；
- * 内嵌世界书（character_book）里启用的条目并入【设定集】——不少卡把核心人设写在世界书里。
+ * 内嵌世界书（character_book）的条目原样进角色的世界书（常驻 / 触发词 / 次要触发词 / 区分大小写），
+ * 不少卡把核心人设写在世界书里。卡只链接了外部世界书（extensions.world）时，在角色编辑页用
+ * 「从文件导入」把那份世界书文件导进来。
  * `{{char}}` / `{{user}}` 宏分别替换为角色名与「用户」。
  */
 object SillyTavernCardParser {
@@ -165,38 +169,124 @@ object SillyTavernCardParser {
      */
     private fun extractLoreEntries(data: JsonObject): List<PersonaLoreEntry> {
         val book = data["character_book"] as? JsonObject ?: return emptyList()
-        val entries = runCatching { book["entries"]?.jsonArray }.getOrNull() ?: return emptyList()
-        return entries.mapNotNull { element ->
-            val entry = element as? JsonObject ?: return@mapNotNull null
+        return loreEntries(book["entries"])
+    }
+
+    /**
+     * 读一组世界书条目，兼容两种写法：
+     * - 角色卡内嵌的 character_book（V2/V3）：entries 是数组，字段 keys / secondary_keys / enabled /
+     *   insertion_order / case_sensitive，selectiveLogic 在 extensions 里；
+     * - SillyTavern 导出的世界书文件（World Info）：entries 是以 uid 为键的对象，字段 key / keysecondary /
+     *   disable / order / caseSensitive / selectiveLogic。
+     * selective 为 false 时 SillyTavern 不看次要触发词，这里也不带。触发词写成「a, b」一整串的拆开。
+     */
+    internal fun loreEntries(raw: JsonElement?): List<PersonaLoreEntry> {
+        val items = when (raw) {
+            is JsonArray -> raw.toList()
+            is JsonObject -> raw.values.toList()
+            else -> return emptyList()
+        }
+        return items.mapIndexedNotNull { index, element ->
+            val entry = element as? JsonObject ?: return@mapIndexedNotNull null
             val content = entry.string("content").trim()
-            if (content.isEmpty()) return@mapNotNull null
-            val enabled = (entry["enabled"] as? kotlinx.serialization.json.JsonPrimitive)
-                ?.booleanOrNull ?: true
-            val keys = (entry["keys"] as? kotlinx.serialization.json.JsonArray)
-                ?.mapNotNull {
-                    (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.trim()
-                }
-                ?.filter(String::isNotEmpty)
-                .orEmpty()
-            val constant = (entry["constant"] as? kotlinx.serialization.json.JsonPrimitive)
-                ?.booleanOrNull ?: false
-            val order = (entry["insertion_order"] as? kotlinx.serialization.json.JsonPrimitive)
-                ?.contentOrNull?.toDoubleOrNull() ?: 0.0
-            Triple(
-                order,
-                entries.indexOf(element),
-                PersonaLoreEntry(
-                    name = entry.string("comment").trim().ifEmpty { keys.firstOrNull().orEmpty() },
-                    content = content,
-                    enabled = enabled,
-                    constant = constant || keys.isEmpty(),
-                    keys = keys
-                )
-            )
+            if (content.isEmpty()) return@mapIndexedNotNull null
+            val extensions = entry["extensions"] as? JsonObject
+            val enabled = entry.bool("enabled") ?: entry.bool("disable")?.not() ?: true
+            val keys = entry.keyList("keys").ifEmpty { entry.keyList("key") }
+            val selective = entry.bool("selective")
+            val secondary = if (selective == false) emptyList()
+            else entry.keyList("secondary_keys").ifEmpty { entry.keyList("keysecondary") }
+            val logic = (entry.number("selectiveLogic") ?: extensions?.number("selectiveLogic"))?.toInt()
+                ?.takeIf { it in 0..3 } ?: 0
+            val caseSensitive = entry.bool("case_sensitive") ?: entry.bool("caseSensitive")
+                ?: extensions?.bool("case_sensitive") ?: false
+            val constant = entry.bool("constant") ?: false
+            val order = entry.number("insertion_order") ?: entry.number("order") ?: 0.0
+            val name = entry.string("comment").trim().ifEmpty { entry.string("name").trim() }
+                .ifEmpty { keys.firstOrNull().orEmpty() }
+            Triple(order, index, PersonaLoreEntry(
+                name = name,
+                content = content,
+                enabled = enabled,
+                constant = constant || keys.isEmpty(),
+                keys = keys,
+                secondaryKeys = secondary,
+                selectiveLogic = logic,
+                caseSensitive = caseSensitive
+            ))
         }
             .sortedWith(compareBy({ it.first }, { it.second }))
             .map { it.third }
     }
+
+    /**
+     * 「从文件导入世界书条目」：角色卡 PNG / JSON（取内嵌世界书）、SillyTavern 世界书 JSON、条目数组，
+     * 或者纯文本 / Markdown（按 # 标题拆成几条常驻条目，没有标题就整篇一条）。
+     * 返回 null = 读不出任何条目。`{{char}}` 换成 [charName]，`{{user}}` 换成「用户」。
+     */
+    fun parseLorebook(bytes: ByteArray, fileName: String = "", charName: String = ""): List<PersonaLoreEntry>? =
+        runCatching { parseLorebookUnsafe(bytes, fileName, charName) }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+    private fun parseLorebookUnsafe(bytes: ByteArray, fileName: String, charName: String): List<PersonaLoreEntry> {
+        val isPng = bytes.size > PNG_SIGNATURE.size &&
+            bytes.sliceArray(PNG_SIGNATURE.indices).contentEquals(PNG_SIGNATURE)
+        val text = if (isPng) extractCardJsonFromPng(bytes) ?: return emptyList()
+        else bytes.decodeToString().removePrefix("\uFEFF")
+        val root = runCatching { json.parseToJsonElement(text) }.getOrNull()
+        val entries = when {
+            root is JsonArray -> loreEntries(root)
+            root is JsonObject && root["entries"] != null -> loreEntries(root["entries"])
+            root is JsonObject -> {
+                val data = root["data"] as? JsonObject ?: root
+                val book = data["character_book"] as? JsonObject
+                    ?: (data["extensions"] as? JsonObject)?.get("world") as? JsonObject
+                loreEntries(book?.get("entries"))
+            }
+            isPng -> emptyList()
+            else -> textEntries(text, fileName)
+        }
+        val name = charName.ifBlank {
+            ((root as? JsonObject)?.let { it["data"] as? JsonObject ?: it })?.string("name").orEmpty()
+        }
+        fun String.substituted(): String = (if (name.isNotBlank()) replace("{{char}}", name, ignoreCase = true) else this)
+            .replace("{{user}}", "用户", ignoreCase = true).trim()
+        return entries.map { it.copy(name = it.name.substituted(), content = it.content.substituted()) }
+    }
+
+    /** 纯文本 / Markdown：按 # 标题拆条目（标题当条目名），都设成常驻。 */
+    internal fun textEntries(text: String, fileName: String = ""): List<PersonaLoreEntry> {
+        val body = text.replace("\r\n", "\n").trim()
+        if (body.isEmpty()) return emptyList()
+        val heading = Regex("^#{1,6}\\s+(.+?)\\s*#*\\s*$")
+        val sections = mutableListOf<Pair<String, StringBuilder>>()
+        body.lines().forEach { line ->
+            val match = heading.matchEntire(line.trim())
+            if (match != null) sections += match.groupValues[1].trim() to StringBuilder()
+            else if (sections.isEmpty()) sections += "" to StringBuilder(line).append('\n')
+            else sections.last().second.append(line).append('\n')
+        }
+        val fallback = fileName.substringAfterLast('/').substringBeforeLast('.').trim()
+        return sections.mapNotNull { (title, content) ->
+            val clean = content.toString().trim()
+            if (clean.isEmpty()) null
+            else PersonaLoreEntry(name = title.ifEmpty { fallback }, content = clean, constant = true)
+        }
+    }
+
+    private fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.let { primitive ->
+        primitive.booleanOrNull ?: primitive.contentOrNull?.trim()?.lowercase()?.let { text ->
+            when (text) { "true", "1" -> true; "false", "0" -> false; else -> null }
+        }
+    }
+
+    private fun JsonObject.number(key: String): Double? = (this[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+
+    /** 触发词：数组，或者「a, b，c」一整串。 */
+    private fun JsonObject.keyList(key: String): List<String> = when (val value = this[key]) {
+        is JsonArray -> value.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
+        is JsonPrimitive -> value.contentOrNull.orEmpty().split(',', '，').map(String::trim)
+        else -> emptyList()
+    }.filter(String::isNotEmpty)
 
     /**
      * mes_example 解析：`<START>` 分块，块内 `{{user}}:` / `{{char}}:` 行交替，

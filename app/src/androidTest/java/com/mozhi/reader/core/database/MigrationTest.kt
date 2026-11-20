@@ -1286,6 +1286,28 @@ class MigrationTest {
         }
     }
 
+    @Test fun migrate35To36AddsAnEmptyAnnotationMemoryCacheThatCascadesWithTheBook() {
+        helper.createDatabase(DB_NAME, 35).use { db ->
+            db.execSQL("""
+                INSERT INTO books (id, title, author, coverPath, epubPath, sourceType, importedAt, totalChapters)
+                VALUES (1, '灯塔来信', '示例', NULL, '', 'TXT', 1000, 2)
+            """.trimIndent())
+        }
+        helper.runMigrationsAndValidate(DB_NAME, 36, true, DatabaseMigrations.Migration35To36).use { db ->
+            db.query("SELECT COUNT(*) FROM annotation_memories").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+            db.execSQL("PRAGMA foreign_keys = ON")
+            db.execSQL("INSERT INTO annotation_memories (bookId, cacheKey, sourceRevision, content, createdAt) VALUES (1, 'recap:0:0-10', 'r', '回顾', 1)")
+            db.execSQL("DELETE FROM books WHERE id = 1")
+            db.query("SELECT COUNT(*) FROM annotation_memories").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME = "migration-test.db"
     }

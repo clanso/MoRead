@@ -1,5 +1,6 @@
 package com.mozhi.reader.ai.companion
 
+import io.mockk.mockk
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.core.database.MoReadDatabase
 import com.mozhi.reader.core.database.dao.ProactiveAnnotationJobDao
@@ -105,7 +106,7 @@ class ProactiveAnnotationTimingSwitchTest {
         val quota = mockk<ProactiveAnnotationQuota>()
         val service = mockk<ProactiveAnnotationService>()
         val autonomy = MutableStateFlow(CompanionAutonomySettings(proactiveAnnotationsEnabled = true,
-            annotationLimits = ProactiveAnnotationLimits(timing = ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE)))
+            annotationLimits = ProactiveAnnotationLimits(batch = PARAGRAPH_MODE, timing = ProactiveAnnotationTiming.AFTER_CHAPTER_COMPLETE)))
         val persona = MutableStateFlow<Long?>(3)
         val scheduler: ProactiveAnnotationScheduler
         init {
@@ -124,7 +125,7 @@ class ProactiveAnnotationTimingSwitchTest {
             coEvery { library.readChapterText(any(), any()) } answers { "第" + secondArg<ChapterEntity>().chapterIndex + "章正文".repeat(40) }
             coEvery { quota.reserve(any(), any(), any(), any()) } returns ProactiveAnnotationAllowance(true, 2)
             coEvery { quota.recordCreated(any(), any(), any(), any()) } just Runs
-            scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, scope)
+            scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, mockk(relaxed = true), scope)
             scheduler.setReaderBook(1)
         }
     }

@@ -201,10 +201,11 @@ Room 结构、迁移、备份版本校验和实际数据文件要保持一致。
 | 阅读范围与检索 | `core/retrieval/ReadingScope`、`ReadableCorpus`（位于 `ai/agent/`）、`RetrievalPipeline` 与 `BookGrep` |
 | 书籍向量 | `ai/embedding/` 负责章节切分后的嵌入、进度与增量续跑；`core/vector/` 提供切分和向量相关数据 |
 | 长期记忆 | `ai/memory/` 的滚动总结、记忆固化与仓库；角色配置及导入位于 `ai/persona/` |
-| 主动行为 | `core/datastore/CompanionAutonomySettings`、`ProactiveAnnotationLimits` / `Quota` / `ProactiveAnnotationContextSettings` 与 `ai/companion/ProactiveAnnotationService` / `ProactiveAnnotationContext` |
+| 主动行为 | `core/datastore/CompanionAutonomySettings`、`ProactiveAnnotationLimits` / `Quota` / `ProactiveAnnotationContextSettings`、`AnnotationBatchSettings`、`AnnotationPromptTemplates` 与 `ai/companion/ProactiveAnnotationService` / `ProactiveAnnotationContext`（逐段）、`BatchAnnotationEngine` / `AnnotationRecord` / `AnnotationMemoryStore`（整段）、`WholeBookAnnotationWorker`、`AnnotationPackService` |
 | 媒体与听书 | `ai/media/`、`ai/listen/`、`ai/audiobook/`；缓存、TTS 设置与系统引擎位于 `core/speech/` |
 
 - 默认聊天外观下角色的话不装气泡（`ChatBubbleStyle.inline`），正文与互动岛直接排在页面上、与角色名对齐；自定义了气泡形状或底色的角色仍画气泡。脚注来源以引文卡呈现。段落讨论弹层按「页边批注」排版，讨论是视觉主体：原文是比讨论小一档的宋体摘录块（按实际划线样式绘制，默认折三行、点击展开），样式与颜色收在「原文」小标行末的样式钮里、点开后就地可改；讨论用更大一号的界面黑体挂在一根竖线上，回复缩进一级。
+- 世界书：命中规则只在 `ai/prompt/PersonaLoreMatcher`，聊天（场景原文 + 用户这一句；重试、重新生成也拿用户最后一句去触发）、随读段评（这一段正文）、段落讨论（引文、上下文与讨论串）、读书笔记共创（勾选的素材与要求）共用。常驻条目总是注入；触发词默认不区分大小写，写成 `/正则/flags` 按正则（写坏了按字面），次要触发词按 SillyTavern 的 selectiveLogic 再过滤一遍，条目可设区分大小写。`SillyTavernCardParser` 读角色卡内嵌的 character_book（V2 / V3）；只链接了外部世界书的卡，在角色编辑页「从文件导入」（`parseLorebook`：角色卡、SillyTavern World Info JSON、条目数组、按 # 标题拆条目的文本）。角色设定块默认不截断（`ProactiveAnnotationContextSettings.personaMaxChars`），旧版固定截到 2,400 字时长卡的世界书整段被截掉。回归见 `PersonaLoreMatcherTest`、`SillyTavernCardParserTest`。
 - 互动回答：`ai/genui/` 解析模型输出的 DIL 文档并编译为可恢复的界面程序，`runtime/GenUiEngine` / `GenUiSession` 通过 QuickJS 执行，`ui/genui/GenUiHost` / `GenUiRenderer` 将界面树渲染为原生 Compose 控件。`feature/reader/CompanionGenUi` 接入消息展示、会话状态和动作；`core/datastore/CompanionGenUiSettings` 保存生成级别、样式、图片与运行策略。图片默认点按生成，运行时不提供 DOM 或直接网络访问。回归入口为 `GenUiCompilerTest`、`GenUiEngineTest`、`GenUiJniKeepRulesTest`、`GenUiContrastTest` 和设备端 `GenUiAndroidRuntimeTest`。
 - 对话导出：会话历史弹层（`CompanionConversationSheet`，书内与书库伴读共用）每行的导出按钮打开 `ConversationExportDialog`，把整段会话导出为 Markdown，可分享或经系统文件选择器保存（无需存储权限）。`ConversationTranscript.buildConversationMarkdown` 是纯函数：只导出用户与 AI 发言，AI 回复复用 `parseCompanionParts` 去掉气泡与语音标记、互动界面取文字投影，可选附上思考过程与工具名，不导出工具结果原文。回归见 `ConversationTranscriptTest`。
 
@@ -322,6 +323,10 @@ Compose 使用 `stringResource` / `pluralStringResource`。资源命名、占位
 - `AgentLoop.RoundStarted` 和 `MessageEntity.clientRoundId` 在持久化之前确定气泡身份；`CompanionStreamingReducer` 的状态由 Main 线程串行管理，Room 与流事件的到达顺序不应改变列表 key。
 - 生图/TTS 配置用 `CommittedTextFieldState` 保留本地选择区和输入法组合态，失焦或操作前提交；`SettingsWriteQueue` 顺序保存并提供 flush 屏障，存储回声不覆盖正在输入的草稿。
 - `ProactiveAnnotationScheduler` 是全应用唯一的有界串行生成入口。`ProactiveAnnotationJobEntity` 按书籍、章节、角色和正文修订版持久去重；段落结果与已完成段落账本在同一 Room 事务中落库。旧轮次标记 `DONE` 后仍须核对当前条数上限与可生成范围；调高上限或重访此前跳过的范围时，只补缺失候选，保留成功账本与失败重试预算。
+- 整段模式（`AnnotationBatchSettings.mode`，默认）：`AnnotationChunks.split` 把一章按目标字数（默认 5,000）切在换行处，切法只由正文和目标长度决定；`BatchAnnotationEngine.runChapter` 让几位伴读一段一段轮流读，每段一次请求写出这一段的全部批注（`batchAnnotationMessages`），另发一次二次校对（`proofreadMessages` / `ProofreadParser`：keep、rewrite、move、drop，`ForesightHints` 只给线索、校对失败时兜底），校对过的才在 `commitBatch` 事务里落库。猜错的批注必须原样保留，规则写在校对模板里。账本是 `ProactiveAnnotationJobEntity` 上 `batch:` + 正文哈希的修订版和 `DoneRanges`（已读区间），与逐段模式互不干扰；同一本书同一时刻只有一处在写（引擎内的按书 `Mutex`）。调度器按设置分流，逐段模式原样保留。
+- 阅读记录（整段模式的前文）：`AnnotationRecordPlanner` 在 `windowChars`（默认 12 万字）里从最早的往后压：原文 → 章节回顾（带着这一章全部批注，每条标着引文和作者）→ 十章一组的前情提要（只留猜测、疑问类批注，`AnnotationRecordText.isGuess`）→ 从略，最新一块永远是原文。回顾与提要由 `AnnotationMemoryStore` 用 `RECAP` / `ARC` 模板生成，按正文哈希缓存在 `annotation_memories`（数据库 v36），没写成时退回头尾摘录。系统消息只放人设、常驻世界书和规则，整本书写下来不变，便于提示词缓存；被这一段触发的世界书条目和【本次要求】放在用户消息末尾。
+- 流程提示词（批量规则、二次校对、章节回顾、前情提要、逐段规则、接话）在 `AnnotationPromptTemplates`，只存用户改过的条目；「主动段评提示词」页的「流程提示词」能看全文、改、逐条或全部恢复默认，`AnnotationTemplatePreview` 把应用每次接在后面的格式契约原样展示。整段参数在随读段评设置页「更多设置」里的「整段生成与阅读记录」。
+- 整本生成：书籍详情页的 `BookAnnotationToolsCard` 估算请求数后排入 `WholeBookAnnotationWorker`（WorkManager 前台任务，dataSync 通知），和随读共用引擎与账本，不看每日上限、语音和配图默认不带；已写过的段落跳过，失败的章节最后再试一次。`AnnotationPackService` 把一本书的批注（连同接话）导出成 `moread.annotation-pack` JSON，导入时引文以本机正文为准用 `QuoteMatcher` 重新定位，伴读按名字对应（没有就新建只有名字的角色），导入了伴读批注的章节记成整段已写完。
 - `ProactiveAnnotationParagraphs` 在本地选择段落；生成请求接收截至目标段落的本章前缀，以及 `ProactiveAnnotationContext` 从严格前文章节检索的相关原文和有效梗概。检索复用本地 BM25，不增加模型调用；梗概须同时通过正文修订版、来源范围与原文哈希校验，正文变化后停止旧请求。`AnnotationVisibility.forDisplay` 只遵守用户的 AI 批注显示开关，已保存段评在正文、详情、回顾和完成提示中立即可查看，讨论不要求先读到原文。自动聊天上下文和查询工具仍检查来源范围；预生成不修改阅读水位。开启提前章节时，正在阅读的章节每轮按角色处理至多 3 个候选段落（`PROACTIVE_VISIBLE_CHAPTER_SLOTS_PER_PASS`），预生成章节每轮 1 个，随后轮到其他章节，防止本章不限条数阻塞下一章；进入章节模式下每个候选开工前重读阅读进度，读者已翻过的候选直接跳过（不计失败），调用留给前方未读段落；同轮失败候选只在完整一轮结束后参加最多两轮的重试，前文上下文缓存复用并校验正文修订版。
 - 段评目标按句切成 200 字以内的小块，降低目标跨页导致引文所在页看不到段评的概率。进入章节生成时从读者当前页之后选段。每格正选输出无法解析或引文无法定位时，改用同格次选；超时和请求错误不换段。引文只在目标内用 `QuoteMatcher.bestOverlap` 定位，失败原因写入日志 `ProactiveAnnotation`（不含正文）。
 - `ProactiveAnnotationContextSettings` 提供省流 8,000、均衡 16,000、充分 32,000 字符及 4,000～64,000 自定义预算，默认均衡。预算覆盖本章正文（含单独重复的目标段落）、前文片段与梗概，不含角色设定和写作提示词；全局与单书覆盖共用设置页，修改预算会让在途任务失效。
@@ -337,7 +342,7 @@ Compose 使用 `stringResource` / `pluralStringResource`。资源命名、占位
 - `CompanionAutonomySettings` 保存多伴读选择和独立段评预设。未单独选角色时跟随当前伴读；多选时按角色分别去重、共享每日额度并预留后续角色份额。`AnnotationPromptSettingsScreen` 复用预设编辑器，支持多条开关、编辑和四种注入位置；`ProactiveAnnotationPrompts` 提供可修改的内置口吻与划线风格，原文定位及输出格式契约独立保留。
 - 主动段评通过 `ModelRole.PROACTIVE_ANNOTATION` 分配，未配置时只回落 `CHEAP`，已配置模型的错误不会暗中切换模型。每章“不限制”按全部候选段落生成，没有固定 10 条限制；`ProactiveAnnotationParagraphs.generationBuckets` 按约 800 原文字符的区间轮流取段，先覆盖全章再补各区间剩余段落，避免未完成的预生成只覆盖前几页。切片续跑固定本轮起点与分组，去重或翻页不重排区间；有限条数仍按原文字符位置分布。`ProactiveAnnotationParagraphs` 拆分超长段落，保留 UTF-16 边界并限制上下文只到目标结尾；每日限额与已完成段落去重仍适用；已保存段评立即可查看。
 
-对应回归测试位于 `feature/reader/*Spread*Test`、`engine/ReaderContentControllerTest`、`CompanionChat*Test`、`ReaderPaneRetentionTest`、`settings/ProactiveAnnotationSettingsScreenTest`、`core/retrieval/AnnotationVisibilityTest`、`ai/companion/`、`ui/WindowLayoutTest` 和数据库迁移/可见水位的 Android 测试中。
+对应回归测试位于 `feature/reader/*Spread*Test`、`engine/ReaderContentControllerTest`、`CompanionChat*Test`、`ReaderPaneRetentionTest`、`settings/ProactiveAnnotationSettingsScreenTest`、`core/retrieval/AnnotationVisibilityTest`、`ai/companion/`（整段模式：`AnnotationChunksTest`、`AnnotationRecordTest`、`BatchAnnotationPromptsTest`）、`core/datastore/AnnotationPromptTemplatesTest`、`ui/WindowLayoutTest` 和数据库迁移/可见水位的 Android 测试中。
 
 
 ### 阅读外观、人物资料与紧凑词云
