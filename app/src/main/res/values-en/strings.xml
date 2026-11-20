@@ -964,8 +964,8 @@
     <string name="whole_book_preparing">Preparing</string>
     <string name="whole_book_chapter">Chapter %1$d</string>
     <string name="whole_book_chapter_titled">Chapter %1$d · %2$s</string>
-    <string name="whole_book_running">%1$s · chapter %2$d of %3$d · %4$d notes written</string>
-    <string name="whole_book_running_no_total">%1$s · %2$d notes written</string>
+    <string name="whole_book_running">%1$s · chapter %2$d of %3$d · notes so far: %4$d</string>
+    <string name="whole_book_running_no_total">%1$s · notes so far: %2$d</string>
     <string name="whole_book_queued">Queued: starts when online</string>
     <string name="whole_book_intro">Let your companions write notes for the whole book in the background, chapter by chapter, even after you close the app. Notes can also be exported to a file, so you can move phones or write them on another device and import them here.</string>
     <string name="whole_book_start">Write the whole book…</string>
@@ -976,12 +976,12 @@
     <string name="whole_book_from_current">Start from the chapter you are reading</string>
     <string name="whole_book_from_chapter">Start from chapter %1$d, where you are reading</string>
     <string name="whole_book_estimating">Estimating…</string>
-    <string name="whole_book_estimate">%1$d chapters, about %2$s characters, %3$d companions, roughly %4$d requests (estimated from the current batch settings, including proofreading; a few recap requests are added when the reading record overflows).</string>
+    <string name="whole_book_estimate">Chapters: %1$d · characters: about %2$s · companions: %3$d · requests: roughly %4$d (estimated from the current batch settings, including proofreading; a few recap requests are added when the reading record overflows).</string>
     <string name="whole_book_note">Whole-book writing always uses batch mode and ignores the daily cap, so it uses your AI service quota; per-chapter counts, batch settings and prompts follow your settings. Passages already written are skipped, and if it is stopped or interrupted it picks up where it left off.</string>
     <string name="whole_book_voice">Also generate voice</string>
     <string name="whole_book_images">Also generate images</string>
-    <string name="whole_book_done">Last whole-book run wrote %1$d notes</string>
-    <string name="whole_book_done_failed">Last whole-book run wrote %1$d notes; chapters %2$s did not finish, start again to fill them in</string>
+    <string name="whole_book_done">Last whole-book run · notes written: %1$d</string>
+    <string name="whole_book_done_failed">Last whole-book run · notes written: %1$d · unfinished chapters: %2$s (start again to fill them in)</string>
     <string name="whole_book_failed">Last whole-book run failed: %1$s</string>
     <string name="whole_book_failed_unknown">unknown reason</string>
     <string name="whole_book_cancelled">Last whole-book run was stopped. Finished notes are kept, and starting again continues where it left off</string>
@@ -1001,9 +1001,9 @@
         <item quantity="one">Imported %1$d note</item>
         <item quantity="other">Imported %1$d notes</item>
     </plurals>
-    <string name="annotation_pack_imported_replies">", %1$d replies"</string>
-    <string name="annotation_pack_duplicates">"; %1$d already here"</string>
-    <string name="annotation_pack_skipped">"; %1$d skipped because the quote is not in this copy of the book"</string>
+    <string name="annotation_pack_imported_replies">", replies: %1$d"</string>
+    <string name="annotation_pack_duplicates">"; already here: %1$d"</string>
+    <string name="annotation_pack_skipped">"; skipped because the quote is not in this copy of the book: %1$d"</string>
     <string name="annotation_pack_new_personas">". New characters: %1$s (name only; add a persona on the Characters page)"</string>
     <string name="annotation_pack_failed">Failed: %1$s</string>
     <string name="annotation_pack_unwritable">Could not write the selected file</string>
