@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -43,6 +44,7 @@ import com.mozhi.reader.core.database.entity.AiModelEntity
 import com.mozhi.reader.core.database.entity.AiModelType
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
+import com.mozhi.reader.core.i18n.resolve
 import com.mozhi.reader.ui.components.DashedAddRow
 import com.mozhi.reader.ui.components.FrostedSurface
 import com.mozhi.reader.ui.components.MoReadRowDivider
@@ -60,9 +62,13 @@ fun AiServiceScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val context = LocalContext.current
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
-            when (event) { is SettingsEvent.ShowMessage -> snackbar.showSnackbar(event.message) }
+            when (event) {
+                is SettingsEvent.ShowMessage -> snackbar.showSnackbar(event.message)
+                is SettingsEvent.ShowText -> snackbar.showSnackbar(event.text.resolve(context))
+            }
         }
     }
     Box(Modifier.fillMaxSize()) {

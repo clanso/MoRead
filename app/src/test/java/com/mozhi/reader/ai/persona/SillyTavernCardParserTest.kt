@@ -119,6 +119,104 @@ class SillyTavernCardParserTest {
         assertNull(SillyTavernCardParser.parse("""{"description":"没有名字"}""".toByteArray()))
     }
 
+    @Test
+    fun cardBookKeepsSecondaryKeysLogicAndCase() {
+        val json = """
+            {
+              "spec": "chara_card_v2",
+              "data": {
+                "name": "柯萝伊",
+                "character_book": {
+                  "entries": [
+                    {"keys": ["魔石"], "secondary_keys": ["采集", "仓库"], "content": "{{char}}的魔石。",
+                     "insertion_order": 20, "selective": true, "constant": false, "comment": "魔石",
+                     "extensions": {"selectiveLogic": 3}},
+                    {"keys": ["Zanis"], "secondary_keys": ["学校"], "content": "札尼斯。", "insertion_order": 10,
+                     "selective": false, "extensions": {"case_sensitive": true}},
+                    {"keys": [], "content": "常驻。", "insertion_order": 30}
+                  ]
+                }
+              }
+            }
+        """.trimIndent()
+
+        val book = SillyTavernCardParser.parse(json.toByteArray())!!.worldBook
+
+        assertEquals(listOf("Zanis", "魔石", ""), book.map { it.name })
+        // selective = false：SillyTavern 不看次要触发词，导进来也不带。
+        assertEquals(emptyList<String>(), book[0].secondaryKeys)
+        assertTrue(book[0].caseSensitive)
+        assertTrue(!book[0].constant)
+        assertEquals("柯萝伊的魔石。", book[1].content)
+        assertEquals(listOf("采集", "仓库"), book[1].secondaryKeys)
+        assertEquals(3, book[1].selectiveLogic)
+        assertTrue(!book[1].caseSensitive)
+        assertTrue(book[2].constant)
+    }
+
+    @Test
+    fun parsesSillyTavernWorldInfoFile() {
+        val json = """
+            {
+              "entries": {
+                "0": {"uid": 0, "key": ["阿黛尔"], "keysecondary": ["愧疚"], "comment": "阿黛尔的心事",
+                      "content": "她一直愧疚。", "constant": false, "selective": true, "selectiveLogic": 2,
+                      "order": 100, "disable": false, "caseSensitive": null},
+                "1": {"uid": 1, "key": "里泽尔, 草药店，药铺", "content": "边境小镇。", "order": 50, "disable": true},
+                "2": {"uid": 2, "key": [], "content": "", "order": 1}
+              }
+            }
+        """.trimIndent()
+
+        val entries = SillyTavernCardParser.parseLorebook(json.toByteArray(), "ChloeAdele.json")!!
+
+        assertEquals(2, entries.size)
+        assertEquals("里泽尔", entries[0].name)
+        assertEquals(listOf("里泽尔", "草药店", "药铺"), entries[0].keys)
+        assertTrue(!entries[0].enabled)
+        assertTrue(!entries[0].constant)
+        assertEquals("阿黛尔的心事", entries[1].name)
+        assertEquals(listOf("阿黛尔"), entries[1].keys)
+        assertEquals(listOf("愧疚"), entries[1].secondaryKeys)
+        assertEquals(2, entries[1].selectiveLogic)
+        assertTrue(entries[1].enabled)
+        assertTrue(!entries[1].caseSensitive)
+    }
+
+    @Test
+    fun lorebookFromCardPngArrayAndMarkdown() {
+        val card = """{"spec":"chara_card_v2","data":{"name":"阿黛尔","character_book":{"entries":[
+            {"keys":["魔石"],"content":"{{char}}管着仓库。"}]}}}"""
+        val fromPng = SillyTavernCardParser.parseLorebook(pngWith("chara" to base64(card)), "card.png")!!
+        assertEquals("阿黛尔管着仓库。", fromPng.single().content)
+
+        val array = """[{"keys":["学校"],"content":"{{char}}和{{user}}在等开学。"}]"""
+        val fromArray = SillyTavernCardParser.parseLorebook(array.toByteArray(), "x.json", charName = "柯萝伊")!!
+        assertEquals("柯萝伊和用户在等开学。", fromArray.single().content)
+        assertTrue(!fromArray.single().constant)
+
+        val markdown = """
+            开头没有标题的一段。
+
+            # 札尼斯
+            学园都市。
+
+            ## 读书会 ##
+            每周三。
+        """.trimIndent()
+        val fromText = SillyTavernCardParser.parseLorebook(markdown.toByteArray(), "notes/札尼斯设定.md")!!
+        assertEquals(listOf("札尼斯设定", "札尼斯", "读书会"), fromText.map { it.name })
+        assertEquals(listOf("开头没有标题的一段。", "学园都市。", "每周三。"), fromText.map { it.content })
+        assertTrue(fromText.all { it.constant })
+    }
+
+    @Test
+    fun lorebookWithoutEntriesReturnsNull() {
+        assertNull(SillyTavernCardParser.parseLorebook(ByteArray(0)))
+        assertNull(SillyTavernCardParser.parseLorebook("""{"foo":1}""".toByteArray()))
+        assertNull(SillyTavernCardParser.parseLorebook(pngWith()))
+    }
+
     // ---- PNG 构造 ----
 
     private fun base64(text: String): String =

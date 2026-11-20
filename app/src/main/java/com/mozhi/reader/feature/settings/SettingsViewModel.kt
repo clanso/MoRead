@@ -3,11 +3,13 @@ package com.mozhi.reader.feature.settings
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mozhi.reader.R
 import com.mozhi.reader.ai.embedding.EmbeddingProgressTracker
 import com.mozhi.reader.ai.embedding.LibraryEmbeddingProgress
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.ai.provider.AiProviderRepository
 import com.mozhi.reader.core.database.entity.AiModelEntity
+import com.mozhi.reader.core.i18n.UiText
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.database.entity.PersonaEntity
@@ -70,6 +72,8 @@ data class SettingsUiState(
 
 sealed interface SettingsEvent {
     data class ShowMessage(val message: String) : SettingsEvent
+    /** 按当前语言解析后显示的消息。 */
+    data class ShowText(val text: UiText) : SettingsEvent
 }
 
 /** 设置主页：Provider 列表（编辑与模型管理在 provider/{id} 二级页）、模型分配、外观、应用。 */
@@ -378,6 +382,28 @@ class SettingsViewModel @Inject constructor(
 
     fun resetAnnotationPrompts() {
         viewModelScope.launch { readerSettingsRepository.resetAnnotationPrompts() }
+    }
+
+    /** 保存一段流程提示词；[text] 为 null、空或和默认一样时等于恢复默认。 */
+    fun saveAnnotationTemplate(id: String, text: String?) {
+        viewModelScope.launch {
+            runCatching { readerSettingsRepository.saveAnnotationTemplate(id, text) }
+                .onSuccess {
+                    eventChannel.send(SettingsEvent.ShowText(UiText.of(
+                        if (text == null) R.string.annotation_template_restored else R.string.annotation_template_saved)))
+                }
+                .onFailure { error ->
+                    eventChannel.send(error.message?.let(SettingsEvent::ShowMessage)
+                        ?: SettingsEvent.ShowText(UiText.of(R.string.annotation_template_save_failed)))
+                }
+        }
+    }
+
+    fun resetAnnotationTemplates() {
+        viewModelScope.launch {
+            readerSettingsRepository.resetAnnotationTemplates()
+            eventChannel.send(SettingsEvent.ShowText(UiText.of(R.string.annotation_templates_reset_done)))
+        }
     }
 
     fun setAnnotationLimits(limits: ProactiveAnnotationLimits) {

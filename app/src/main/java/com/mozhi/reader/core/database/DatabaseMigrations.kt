@@ -796,6 +796,24 @@ object DatabaseMigrations {
         }
     }
 
+    /** 整段段评的阅读记忆：章节回顾与前情提要的缓存，删书级联清理。 */
+    val Migration35To36 = object : Migration(35, 36) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS `annotation_memories` (
+                    `bookId` INTEGER NOT NULL,
+                    `cacheKey` TEXT NOT NULL,
+                    `sourceRevision` TEXT NOT NULL,
+                    `content` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`bookId`, `cacheKey`),
+                    FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_annotation_memories_bookId` ON `annotation_memories` (`bookId`)")
+        }
+    }
+
     /** 人物档案：逐人落库的断点与缓存，删书级联清理。 */
     val Migration34To35 = object : Migration(34, 35) {
         override fun migrate(db: SupportSQLiteDatabase) {

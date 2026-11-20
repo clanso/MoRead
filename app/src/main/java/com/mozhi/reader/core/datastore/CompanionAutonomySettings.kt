@@ -35,6 +35,8 @@ data class CompanionAutonomySettings(
     /** Empty preserves the previous behavior: follow the current companion. */
     val annotationPersonaIds: Set<Long> = emptySet(),
     val annotationPrompts: List<GlobalPromptPreset> = ProactiveAnnotationPrompts.DEFAULTS,
+    /** 段评流程里的固定提示词（批量规则、二次校对、回顾……）；只存改过的。 */
+    val annotationTemplates: AnnotationTemplateSet = AnnotationTemplateSet(),
     /** 多个角色参与段评时互相看得见并偶尔接话；关＝各写各的，沿用旧行为。 */
     val annotationInterplay: Boolean = true
 ) {

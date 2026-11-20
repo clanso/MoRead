@@ -72,14 +72,19 @@ internal data class ProactiveBookPolicy(
     val voice: Boolean,
     val images: Boolean,
     val prompts: List<com.mozhi.reader.core.datastore.GlobalPromptPreset>,
-    val interplay: Boolean
+    val interplay: Boolean,
+    val templates: com.mozhi.reader.core.datastore.AnnotationTemplateSet = com.mozhi.reader.core.datastore.AnnotationTemplateSet()
 )
 
 internal fun CompanionAutonomySettings.policyFor(bookId: Long, personaId: Long?) = ProactiveBookPolicy(
     proactiveAnnotationsEnabled, annotationPersonasFor(personaId), annotationLimitsFor(bookId).normalized(),
     annotationVoiceActive, annotationImageActive, annotationPrompts.filter { it.enabled },
-    annotationInterplay && annotationPersonasFor(personaId).size > 1
+    annotationInterplay && annotationPersonasFor(personaId).size > 1,
+    annotationTemplates
 )
+
+/** 整段模式下，正在读的这一章每轮写几段再让给预生成的章节。 */
+internal const val BATCH_VISIBLE_CHAPTER_CHUNKS_PER_PASS = 2
 
 /** One worker for the entire process. Queue is bounded to six chapters of the visible book. */
 @Singleton
@@ -90,6 +95,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
     private val settings: ReaderSettingsRepository,
     private val quota: ProactiveAnnotationQuota,
     private val service: ProactiveAnnotationService,
+    private val batchEngine: BatchAnnotationEngine,
     @ApplicationScope private val applicationScope: CoroutineScope
 ) {
     private data class Trigger(val bookId: Long, val chapterIndex: Int, val timing: ProactiveAnnotationTiming)
@@ -114,6 +120,8 @@ class ProactiveAnnotationScheduler @Inject constructor(
     }
     // Only unfinished rounds in the current reader window; committed successes remain in Room.
     private val rounds = mutableMapOf<Long, GenerationRound>()
+    /** 已经写好、还没发通知的批注（整段模式一章可能分几轮写完，通知只发一次）。 */
+    private val batchNotices = mutableMapOf<Pair<Trigger, Long>, MutableList<Long>>()
     private var exhaustedNoticeDay = Long.MIN_VALUE
     private val exhaustedNoticeBooks = mutableSetOf<Long>()
     private val commits = ProactiveAnnotationCommitStore(database)
@@ -176,7 +184,7 @@ class ProactiveAnnotationScheduler @Inject constructor(
                 pending.clear(); readerVersion++
                 retries.values.forEach { it.cancel() }; retries.clear()
                 lastEntered = null; lastCompleted = null; observedPolicy = null
-                priorityEntry = null; rounds.clear()
+                priorityEntry = null; rounds.clear(); batchNotices.clear()
             }
             readerBook = bookId
         }
@@ -320,6 +328,10 @@ class ProactiveAnnotationScheduler @Inject constructor(
 
     private suspend fun run(trigger: Trigger) {
         val policy = settings.companionAutonomySettings.first().policyFor(trigger.bookId, settings.activePersonaId.first())
+        if (policy.limits.batch.batch) {
+            runBatch(trigger, policy)
+            return
+        }
         for ((index, personaId) in annotationPersonaOrder(policy.personaIds, trigger.chapterIndex, policy.interplay).withIndex()) {
             if (synchronized(lock) { observedPolicy != policy || !wanted(trigger) }) break
             runForPersona(trigger, personaId, policy.personaIds.size - index)
@@ -458,7 +470,8 @@ class ProactiveAnnotationScheduler @Inject constructor(
                             com.mozhi.reader.core.library.AnnotationMedia.decode(it.mediaJson).illustrationId != null
                         }
                     },
-                    peers = peers, repliesSoFar = repliesSoFar, interplay = initial.interplay),
+                    peers = peers, repliesSoFar = repliesSoFar, interplay = initial.interplay,
+                    personaMaxChars = limits.context.personaMaxChars, templates = initial.templates),
                 allowance = { allowance() },
                 recordMedia = { voices, images ->
                     check(valid()) { "generation_context_changed_before_media_charge" }
@@ -552,6 +565,124 @@ class ProactiveAnnotationScheduler @Inject constructor(
                 if (version.second == readerVersion && noticeEpoch == noticeVersion && readerBook == trigger.bookId) {
                     mutableResults.tryEmit(ProactiveAnnotationBatchResult(trigger.bookId, trigger.chapterIndex,
                         persona.name, persona.avatarPath, noticeIds.size, noticeIds, personaId,
+                        persona.personality, persona.speakingStyle))
+                }
+            }
+        }
+    }
+
+
+    /**
+     * 整段模式：一章交给 [BatchAnnotationEngine]，几位伴读一段一段轮流写。额度、让路、重试、通知
+     * 与逐段模式同一套规矩；账本按「读过的范围」记，和逐段模式的段落账本互不相干。
+     */
+    private suspend fun runBatch(trigger: Trigger, policy: ProactiveBookPolicy) {
+        val version = synchronized(lock) {
+            if (!wanted(trigger)) return
+            policyVersion to readerVersion
+        }
+        val noticeEpoch = synchronized(lock) { noticeVersion }
+        fun readerContextValid(): Boolean = synchronized(lock) {
+            version == (policyVersion to readerVersion) && wanted(trigger)
+        }
+        if (!policy.enabled || policy.limits.timing != trigger.timing || policy.personaIds.isEmpty()) return
+        val dao = database.proactiveAnnotationJobDao()
+        fun startOfDay(): Long = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val firstPersona = policy.personaIds.first()
+        val budget = quota.reserve(policy.limits.copy(maxPerChapter = ProactiveAnnotationLimits.UNLIMITED), requestVoice = false, requestImages = false)
+        if (!budget.accepted || budget.maxAnnotations <= 0 ||
+            (!policy.limits.dailyUnlimited && dao.createdSince(startOfDay()) >= policy.limits.dailyMax)) {
+            announceDailyBudgetExhausted(trigger, firstPersona, noticeEpoch, version)
+            return
+        }
+        val book = library.getBook(trigger.bookId) ?: return
+        if (!readerContextValid()) return
+        val entryMode = trigger.timing == ProactiveAnnotationTiming.ON_CHAPTER_ENTRY
+        val startAt = if (entryMode && book.lastReadChapterIndex == trigger.chapterIndex) book.lastReadCharOffset.coerceAtLeast(0) else 0
+        val visible = synchronized(lock) { lastEntered == trigger }
+        val personaOrder = annotationPersonaOrder(policy.personaIds, trigger.chapterIndex, policy.interplay)
+        val gate = object : BatchGate {
+            override suspend fun valid(): Boolean {
+                if (!readerContextValid()) return false
+                val current = settings.companionAutonomySettings.first().policyFor(trigger.bookId, settings.activePersonaId.first())
+                return current == policy && library.getBook(trigger.bookId) != null && readerContextValid()
+            }
+
+            override fun stillValid(): Boolean = readerContextValid()
+
+            override suspend fun allowance(): com.mozhi.reader.core.datastore.ProactiveAnnotationAllowance? {
+                if (!valid()) return null
+                if (!policy.limits.dailyUnlimited && dao.createdSince(startOfDay()) >= policy.limits.dailyMax) return null
+                return quota.reserve(policy.limits, policy.voice, policy.images)
+                    .takeIf { it.accepted && it.maxAnnotations > 0 && readerContextValid() }
+            }
+
+            override fun shouldYield(): Boolean = shouldYield(trigger)
+
+            override suspend fun readerOffset(): Int? {
+                if (!entryMode) return null
+                val current = try { library.getBook(trigger.bookId) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                return current?.takeIf { it.lastReadChapterIndex == trigger.chapterIndex }?.lastReadCharOffset
+            }
+
+            override suspend fun recordQuota(annotations: Int, voices: Int, images: Int) {
+                runCatching { quota.recordCreated(annotations, voices, images) }
+            }
+
+            override suspend fun imageFailed() {
+                runCatching { quota.recordImageFailure() }
+            }
+        }
+        val outcome = try {
+            batchEngine.runChapter(
+                BatchChapterRequest(
+                    bookId = trigger.bookId, chapterIndex = trigger.chapterIndex, personaIds = personaOrder,
+                    limits = policy.limits, prompts = policy.prompts, templates = policy.templates,
+                    voice = policy.voice, images = policy.images, interplay = policy.interplay,
+                    startAt = startAt,
+                    maxChunksPerPass = when {
+                        !entryMode || policy.limits.aheadChapters <= 0 -> Int.MAX_VALUE
+                        visible -> BATCH_VISIBLE_CHAPTER_CHUNKS_PER_PASS
+                        else -> 1
+                    }
+                ),
+                gate
+            )
+        } catch (cancelled: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            BatchChapterOutcome(failed = true, retryable = true)
+        } catch (_: Exception) {
+            BatchChapterOutcome(failed = true, retryable = true)
+        }
+        synchronized(lock) {
+            for ((personaId, ids) in outcome.created) batchNotices.getOrPut(trigger to personaId) { mutableListOf() } += ids
+        }
+        val continuing = outcome.hasMore && !outcome.stopped && readerContextValid()
+        if (continuing) {
+            synchronized(lock) { if (readerContextValid() && pending.size < 6) pending.add(trigger) }
+            wake.trySend(Unit)
+        }
+        if (outcome.yielded && readerContextValid()) {
+            synchronized(lock) { if (readerContextValid() && pending.size < 6) addPending(trigger) }
+            wake.trySend(Unit)
+        }
+        if (outcome.retryable && !outcome.stopped && readerContextValid()) retry(trigger, version)
+        if (continuing || outcome.yielded) return
+        val notices = synchronized(lock) {
+            batchNotices.keys.filter { it.first == trigger }.associate { it.second to batchNotices.remove(it).orEmpty() }
+        }
+        val autonomy = settings.companionAutonomySettings.first()
+        if (!autonomy.noticeActive) return
+        val active = autonomy.annotationPersonasFor(settings.activePersonaId.first())
+        for ((personaId, ids) in notices) {
+            if (ids.isEmpty() || personaId !in active) continue
+            val persona = personas.getPersona(personaId) ?: continue
+            synchronized(lock) {
+                if (version.second == readerVersion && noticeEpoch == noticeVersion && readerBook == trigger.bookId) {
+                    mutableResults.tryEmit(ProactiveAnnotationBatchResult(trigger.bookId, trigger.chapterIndex,
+                        persona.name, persona.avatarPath, ids.size, ids, personaId,
                         persona.personality, persona.speakingStyle))
                 }
             }

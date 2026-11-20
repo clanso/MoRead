@@ -6,6 +6,7 @@ import android.media.MediaPlayer
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mozhi.reader.R
 import com.mozhi.reader.ai.persona.PersonaAvatarStore
 import com.mozhi.reader.ai.persona.PersonaRepository
 import com.mozhi.reader.ai.persona.SillyTavernCardParser
@@ -328,6 +329,46 @@ class PersonaEditorViewModel @Inject constructor(
             eventChannel.send(PersonaEditorEvent.Message("已导入「${card.name}」的角色卡"))
         }
     }
+
+    /**
+     * 从文件导入世界书条目，接在现有条目后面：角色卡 PNG / JSON 的内嵌世界书、SillyTavern 导出的世界书 JSON、
+     * 纯文本 / Markdown（按 # 标题拆）。正文一模一样的条目跳过。
+     */
+    fun importLorebook(uri: Uri?) {
+        uri ?: return
+        viewModelScope.launch {
+            val entries = runCatching {
+                val bytes = withContext(Dispatchers.IO) { readBounded(uri) }
+                    ?: error(context.getString(R.string.persona_lore_import_unreadable))
+                val name = withContext(Dispatchers.IO) { displayName(uri) }
+                withContext(Dispatchers.Default) {
+                    SillyTavernCardParser.parseLorebook(bytes, name, mutableState.value.name.trim())
+                } ?: error(context.getString(R.string.persona_lore_import_empty))
+            }.getOrElse { error ->
+                eventChannel.send(PersonaEditorEvent.Message(context.getString(
+                    R.string.persona_lore_import_failed, error.message ?: error.javaClass.simpleName)))
+                return@launch
+            }
+            var added = 0
+            mutableState.update { state ->
+                val existing = state.worldBook.map { it.content.trim() }.toMutableSet()
+                val fresh = entries.filter { existing.add(it.content.trim()) }
+                added = fresh.size
+                state.copy(worldBook = state.worldBook + fresh)
+            }
+            val skipped = entries.size - added
+            val resources = context.resources
+            eventChannel.send(PersonaEditorEvent.Message(
+                if (skipped > 0) resources.getQuantityString(R.plurals.persona_lore_imported_skipped, added, added, skipped)
+                else resources.getQuantityString(R.plurals.persona_lore_imported, added, added)
+            ))
+        }
+    }
+
+    private fun displayName(uri: Uri): String = runCatching {
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull().orEmpty()
 
     private fun replaceAvatar(newPath: String) {
         val previous = mutableState.value.avatarPath

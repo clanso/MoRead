@@ -1,5 +1,6 @@
 package com.mozhi.reader.ai.companion
 
+import io.mockk.mockk
 import android.app.Application
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -80,7 +81,7 @@ class ProactiveAnnotationLookaheadTest {
             every { settings.activePersonaId } returns MutableStateFlow(3L)
             every { settings.companionAutonomySettings } returns MutableStateFlow(CompanionAutonomySettings(
                 proactiveAnnotationsEnabled = true,
-                annotationLimits = ProactiveAnnotationLimits(timing = ProactiveAnnotationTiming.ON_CHAPTER_ENTRY,
+                annotationLimits = ProactiveAnnotationLimits(batch = PARAGRAPH_MODE, timing = ProactiveAnnotationTiming.ON_CHAPTER_ENTRY,
                     aheadChapters = 1, maxPerChapter = ProactiveAnnotationLimits.UNLIMITED, dailyMax = ProactiveAnnotationLimits.UNLIMITED)))
             val quota = mockk<ProactiveAnnotationQuota>()
             coEvery { quota.reserve(any(), any(), any(), any()) } returns ProactiveAnnotationAllowance(true, Int.MAX_VALUE)
@@ -101,7 +102,7 @@ class ProactiveAnnotationLookaheadTest {
                 """{"quote":"$target","note":"钟声把这段景色连了起来。"}"""
             }
             val service = ProactiveAnnotationService(factory, mockk<AiMediaGenerationService>(), contexts)
-            val scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, applicationScope)
+            val scheduler = ProactiveAnnotationScheduler(database, library, personas, settings, quota, service, mockk(relaxed = true), applicationScope)
             val notices = mutableListOf<ProactiveAnnotationBatchResult>()
             val noticesReady = CompletableDeferred<Unit>()
             applicationScope.launch(start = CoroutineStart.UNDISPATCHED) {

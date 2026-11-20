@@ -80,6 +80,9 @@ data class PersonaExampleDialog(
 /**
  * 世界书/设定集条目。
  * [enabled] 条目级开关；[constant] 常驻注入，false = 关键词触发（[keys] 命中当前上下文才注入）。
+ * 触发词写成 `/正则/flags` 时按正则匹配（SillyTavern 同款写法）。
+ * [secondaryKeys] 非空时按 [selectiveLogic]（SillyTavern 的编号：0 任一、1 不全含、2 都不含、3 全含）
+ * 再过滤一遍主触发词的命中，见 `PersonaLoreMatcher`。
  */
 @Serializable
 data class PersonaLoreEntry(
@@ -87,7 +90,10 @@ data class PersonaLoreEntry(
     val content: String,
     val enabled: Boolean = true,
     val constant: Boolean = true,
-    val keys: List<String> = emptyList()
+    val keys: List<String> = emptyList(),
+    val secondaryKeys: List<String> = emptyList(),
+    val selectiveLogic: Int = 0,
+    val caseSensitive: Boolean = false
 )
 
 private val personaJson = Json { ignoreUnknownKeys = true }
